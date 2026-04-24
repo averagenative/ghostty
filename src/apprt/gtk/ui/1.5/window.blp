@@ -320,4 +320,64 @@ menu tab_context_menu {
     label: _("Change Tab Title…");
     action: "win.prompt-context-tab-title";
   }
+
+  submenu {
+    label: _("Color");
+
+    section {
+      item {
+        label: _("None");
+        action: "win.set-context-tab-color";
+        target: "none";
+      }
+    }
+
+    section {
+      item {
+        label: _("Blue");
+        action: "win.set-context-tab-color";
+        target: "blue";
+      }
+      item {
+        label: _("Teal");
+        action: "win.set-context-tab-color";
+        target: "teal";
+      }
+      item {
+        label: _("Green");
+        action: "win.set-context-tab-color";
+        target: "green";
+      }
+      item {
+        label: _("Yellow");
+        action: "win.set-context-tab-color";
+        target: "yellow";
+      }
+      item {
+        label: _("Orange");
+        action: "win.set-context-tab-color";
+        target: "orange";
+      }
+      item {
+        label: _("Red");
+        action: "win.set-context-tab-color";
+        target: "red";
+      }
+      item {
+        label: _("Pink");
+        action: "win.set-context-tab-color";
+        target: "pink";
+      }
+      item {
+        label: _("Purple");
+        action: "win.set-context-tab-color";
+        target: "purple";
+      }
+      item {
+        label: _("Slate");
+        action: "win.set-context-tab-color";
+        target: "slate";
+      }
+    }
+  }
 }

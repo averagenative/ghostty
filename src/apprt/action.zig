@@ -343,6 +343,11 @@ pub const Action = union(Key) {
     /// otherwise the terminal-set title.
     copy_title_to_clipboard,
 
+    /// Set a palette color tag on the target's tab. Apprts that do
+    /// not implement per-tab coloring (e.g., embedded/macOS today)
+    /// may ignore this action.
+    tab_color: TabColor,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -410,6 +415,7 @@ pub const Action = union(Key) {
         search_selected,
         readonly,
         copy_title_to_clipboard,
+        tab_color,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
@@ -547,6 +553,26 @@ pub const ResizeSplit = extern struct {
 
 pub const MoveTab = extern struct {
     amount: isize,
+};
+
+/// Palette entries for the `tab_color` action. The `none` variant
+/// clears any previously set color. `enum(c_int)` for C ABI parity
+/// with `ghostty_action_tab_color_e`.
+pub const TabColor = enum(c_int) {
+    none,
+    blue,
+    teal,
+    green,
+    yellow,
+    orange,
+    red,
+    pink,
+    purple,
+    slate,
+
+    test "ghostty.h TabColor" {
+        try lib.checkGhosttyHEnum(TabColor, "GHOSTTY_TAB_COLOR_");
+    }
 };
 
 /// The tab to jump to. This is non-exhaustive so that integer values represent

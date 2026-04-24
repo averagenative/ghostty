@@ -15,6 +15,7 @@ const Config = @import("config.zig").Config;
 const Application = @import("application.zig").Application;
 const SplitTree = @import("split_tree.zig").SplitTree;
 const Surface = @import("surface.zig").Surface;
+const TabColor = @import("tab_color.zig").TabColor;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
 
 const log = std.log.scoped(.gtk_ghostty_window);
@@ -139,6 +140,30 @@ pub const Tab = extern struct {
                 },
             );
         };
+
+        /// The palette color tag for this tab. Null when no color is
+        /// set; otherwise one of `TabColor`'s palette names. String-
+        /// valued so it parses directly from GAction parameters and
+        /// keybind configs. Invalid names are ignored with a warning.
+        pub const color = struct {
+            pub const name = "color";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                ?[:0]const u8,
+                .{
+                    .default = null,
+                    .accessor = gobject.ext.typedAccessor(
+                        Self,
+                        ?[:0]const u8,
+                        .{
+                            .getter = Self.getColorName,
+                            .setter = Self.setColorFromName,
+                        },
+                    ),
+                },
+            );
+        };
     };
 
     pub const signals = struct {
@@ -167,6 +192,11 @@ pub const Tab = extern struct {
 
         /// The tooltip of this tab. This is usually bound to the active surface.
         tooltip: ?[:0]const u8 = null,
+
+        /// The palette color tag for this tab (see `tab_color.zig`).
+        /// Defaults to `.none`. Exposed via the `color` GObject property
+        /// as a string so it round-trips cleanly through GAction params.
+        color: TabColor = .none,
 
         // Template bindings
         split_tree: *SplitTree,
@@ -231,6 +261,16 @@ pub const Tab = extern struct {
 
         // Init our actions
         self.initActionMap();
+
+        // Update the tab's visual state (indicator icon + CSS class)
+        // whenever the color property changes.
+        _ = gobject.Object.signals.notify.connect(
+            self,
+            *Self,
+            propColor,
+            self,
+            .{ .detail = "color" },
+        );
     }
 
     fn initActionMap(self: *Self) void {
@@ -243,6 +283,7 @@ pub const Tab = extern struct {
             .init("next-page", actionNextPage, null),
             .init("previous-page", actionPreviousPage, null),
             .init("prompt-tab-title", actionPromptTabTitle, null),
+            .init("set-color", actionSetColor, s_param_type),
         };
 
         _ = ext.actions.addAsGroup(Self, self, "tab", &actions);
@@ -280,6 +321,46 @@ pub const Tab = extern struct {
         );
 
         dialog.present(self.as(gtk.Widget));
+    }
+
+    /// Get this tab's current palette color.
+    pub fn getColor(self: *Self) TabColor {
+        return self.private().color;
+    }
+
+    /// Get the name of this tab's palette color (for the `color`
+    /// property). Returns null when color is `.none`.
+    pub fn getColorName(self: *Self) ?[:0]const u8 {
+        const c = self.private().color;
+        return if (c == .none) null else c.name();
+    }
+
+    /// Set this tab's palette color. Emits a `notify::color` signal
+    /// if the value actually changes.
+    pub fn setColor(self: *Self, color: TabColor) void {
+        const priv = self.private();
+        if (priv.color == color) return;
+        priv.color = color;
+        self.as(gobject.Object).notifyByPspec(properties.color.impl.param_spec);
+    }
+
+    /// Setter used by the `color` GObject property. Null or empty maps
+    /// to `.none`; any other value must be a palette name. Unknown
+    /// names are rejected with a warning, leaving the value unchanged.
+    pub fn setColorFromName(self: *Self, color_name: ?[:0]const u8) void {
+        const raw = color_name orelse {
+            self.setColor(.none);
+            return;
+        };
+        if (raw.len == 0) {
+            self.setColor(.none);
+            return;
+        }
+        const parsed = TabColor.fromString(raw) orelse {
+            log.warn("ignoring unknown tab color: {s}", .{raw});
+            return;
+        };
+        self.setColor(parsed);
     }
 
     /// Get the currently active surface. See the "active-surface" property.
@@ -440,6 +521,48 @@ pub const Tab = extern struct {
         self.promptTabTitle();
     }
 
+    fn actionSetColor(
+        _: *gio.SimpleAction,
+        param_: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const param = param_ orelse {
+            log.warn("tab.set-color called without a parameter", .{});
+            return;
+        };
+        var str: ?[*:0]const u8 = null;
+        param.get("&s", &str);
+        const name = std.mem.span(str orelse {
+            log.warn("tab.set-color received null string parameter", .{});
+            return;
+        });
+        // setColorFromName logs its own warning for unknown names.
+        self.setColorFromName(name);
+    }
+
+    /// Signal handler for `notify::color`. Swaps the CSS class on
+    /// the tab widget so the content area renders the palette accent.
+    /// The full-width tab-strip pill coloring is handled separately
+    /// by `Window.rebuildTabColorCss`, triggered by the same notify
+    /// via a window-level handler.
+    fn propColor(
+        _: *Self,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        self.applyColorCss(self.private().color);
+    }
+
+    /// Apply the color's CSS class to this tab's widget, removing any
+    /// previously applied palette class.
+    fn applyColorCss(self: *Self, color: TabColor) void {
+        const widget = self.as(gtk.Widget);
+        for (TabColor.all) |c| {
+            if (c.cssClass()) |cls| widget.removeCssClass(cls);
+        }
+        if (color.cssClass()) |cls| widget.addCssClass(cls);
+    }
+
     fn actionRingBell(
         _: *gio.SimpleAction,
         _: ?*glib.Variant,
@@ -561,6 +684,7 @@ pub const Tab = extern struct {
             // Properties
             gobject.ext.registerProperties(class, &.{
                 properties.@"active-surface".impl,
+                properties.color.impl,
                 properties.config.impl,
                 properties.@"split-tree".impl,
                 properties.@"surface-tree".impl,

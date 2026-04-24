@@ -632,6 +632,20 @@ typedef enum {
   GHOSTTY_FLOAT_WINDOW_TOGGLE,
 } ghostty_action_float_window_e;
 
+// apprt.action.TabColor
+typedef enum {
+  GHOSTTY_TAB_COLOR_NONE,
+  GHOSTTY_TAB_COLOR_BLUE,
+  GHOSTTY_TAB_COLOR_TEAL,
+  GHOSTTY_TAB_COLOR_GREEN,
+  GHOSTTY_TAB_COLOR_YELLOW,
+  GHOSTTY_TAB_COLOR_ORANGE,
+  GHOSTTY_TAB_COLOR_RED,
+  GHOSTTY_TAB_COLOR_PINK,
+  GHOSTTY_TAB_COLOR_PURPLE,
+  GHOSTTY_TAB_COLOR_SLATE,
+} ghostty_action_tab_color_e;
+
 // apprt.action.SecureInput
 typedef enum {
   GHOSTTY_SECURE_INPUT_ON,
@@ -949,6 +963,7 @@ typedef enum {
   GHOSTTY_ACTION_SEARCH_SELECTED,
   GHOSTTY_ACTION_READONLY,
   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
+  GHOSTTY_ACTION_TAB_COLOR,
 } ghostty_action_tag_e;
 
 typedef union {
@@ -990,6 +1005,7 @@ typedef union {
   ghostty_action_search_total_s search_total;
   ghostty_action_search_selected_s search_selected;
   ghostty_action_readonly_e readonly;
+  ghostty_action_tab_color_e tab_color;
 } ghostty_action_u;
 
 typedef struct {

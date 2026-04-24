@@ -934,7 +934,29 @@ pub const Action = union(enum) {
     ///
     crash: CrashThread,
 
+    /// Set the palette color tag on the focused tab. The value is a
+    /// palette entry name (e.g., `tab_color:blue`, `tab_color:none`).
+    /// On apprts that do not implement per-tab coloring, this is a
+    /// no-op.
+    tab_color: TabColor,
+
     pub const Key = @typeInfo(Action).@"union".tag_type.?;
+
+    /// Keybind-level palette for `tab_color`. Mirrors
+    /// `apprt.action.TabColor`; kept local here to avoid a circular
+    /// import (apprt.action already depends on input).
+    pub const TabColor = enum {
+        none,
+        blue,
+        teal,
+        green,
+        yellow,
+        orange,
+        red,
+        pink,
+        purple,
+        slate,
+    };
 
     /// Make this a valid gobject if we're in a GTK environment.
     pub const getGObjectType = switch (build_config.app_runtime) {
@@ -1382,6 +1404,7 @@ pub const Action = union(enum) {
             .last_tab,
             .goto_tab,
             .move_tab,
+            .tab_color,
             .toggle_tab_overview,
             .new_split,
             .goto_split,
@@ -4487,6 +4510,38 @@ test "parse: set_font_size" {
         try testing.expect(binding.action == .set_font_size);
         try testing.expectEqual(13.5, binding.action.set_font_size);
     }
+}
+
+test "parse: tab_color" {
+    const testing = std.testing;
+
+    // Every palette entry parses to its enum variant.
+    {
+        const binding = try parseSingle("a=tab_color:blue");
+        try testing.expect(binding.action == .tab_color);
+        try testing.expectEqual(Action.TabColor.blue, binding.action.tab_color);
+    }
+    {
+        const binding = try parseSingle("a=tab_color:none");
+        try testing.expect(binding.action == .tab_color);
+        try testing.expectEqual(Action.TabColor.none, binding.action.tab_color);
+    }
+    {
+        const binding = try parseSingle("a=tab_color:slate");
+        try testing.expect(binding.action == .tab_color);
+        try testing.expectEqual(Action.TabColor.slate, binding.action.tab_color);
+    }
+
+    // Unknown palette name fails to parse (InvalidFormat from parseEnum).
+    try testing.expectError(
+        Error.InvalidFormat,
+        parseSingle("a=tab_color:chartreuse"),
+    );
+
+    // Missing parameter also fails.
+    try testing.expect(
+        std.meta.isError(parseSingle("a=tab_color")),
+    );
 }
 
 test "parse: copy to clipboard default" {

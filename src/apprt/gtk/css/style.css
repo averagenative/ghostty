@@ -158,6 +158,56 @@ label.resize-overlay {
 }
 
 /*
+ * Tab color tags
+ *
+ * Per-tab background coloring on the AdwTabBar pill. The
+ * `.gh-tab-color-<name>` class is added directly to each rendered
+ * AdwTab widget by `Window.refreshTabColors` walking the tab bar's
+ * widget tree. Inactive tabs use ~55% alpha; the selected tab's
+ * background goes opaque so identical-color siblings still stand
+ * apart (we hedge across `:checked`, `:selected`, and `.selected`
+ * because libadwaita's selected-tab state class has changed across
+ * versions).
+ *
+ * White text plus a soft dark text-shadow gives a halo-like outline
+ * that stays legible on light palette colors (yellow, pink) and
+ * dark ones alike.
+ */
+
+.gh-tab-color-blue,
+.gh-tab-color-teal,
+.gh-tab-color-green,
+.gh-tab-color-yellow,
+.gh-tab-color-orange,
+.gh-tab-color-red,
+.gh-tab-color-pink,
+.gh-tab-color-purple,
+.gh-tab-color-slate {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.gh-tab-color-blue   { background-color: rgba(53, 132, 228, 0.55); }
+.gh-tab-color-teal   { background-color: rgba(51, 177, 177, 0.55); }
+.gh-tab-color-green  { background-color: rgba(38, 162, 105, 0.55); }
+.gh-tab-color-yellow { background-color: rgba(205, 147, 9, 0.55); }
+.gh-tab-color-orange { background-color: rgba(237, 91, 0, 0.55); }
+.gh-tab-color-red    { background-color: rgba(224, 27, 36, 0.55); }
+.gh-tab-color-pink   { background-color: rgba(192, 97, 203, 0.55); }
+.gh-tab-color-purple { background-color: rgba(145, 65, 172, 0.55); }
+.gh-tab-color-slate  { background-color: rgba(94, 92, 100, 0.55); }
+
+.gh-tab-color-blue:checked,   .gh-tab-color-blue:selected,   .gh-tab-color-blue.selected   { background-color: rgba(53, 132, 228, 1.0); }
+.gh-tab-color-teal:checked,   .gh-tab-color-teal:selected,   .gh-tab-color-teal.selected   { background-color: rgba(51, 177, 177, 1.0); }
+.gh-tab-color-green:checked,  .gh-tab-color-green:selected,  .gh-tab-color-green.selected  { background-color: rgba(38, 162, 105, 1.0); }
+.gh-tab-color-yellow:checked, .gh-tab-color-yellow:selected, .gh-tab-color-yellow.selected { background-color: rgba(205, 147, 9, 1.0); }
+.gh-tab-color-orange:checked, .gh-tab-color-orange:selected, .gh-tab-color-orange.selected { background-color: rgba(237, 91, 0, 1.0); }
+.gh-tab-color-red:checked,    .gh-tab-color-red:selected,    .gh-tab-color-red.selected    { background-color: rgba(224, 27, 36, 1.0); }
+.gh-tab-color-pink:checked,   .gh-tab-color-pink:selected,   .gh-tab-color-pink.selected   { background-color: rgba(192, 97, 203, 1.0); }
+.gh-tab-color-purple:checked, .gh-tab-color-purple:selected, .gh-tab-color-purple.selected { background-color: rgba(145, 65, 172, 1.0); }
+.gh-tab-color-slate:checked,  .gh-tab-color-slate:selected,  .gh-tab-color-slate.selected  { background-color: rgba(94, 92, 100, 1.0); }
+
+/*
  * Splits
  */
 

@@ -26,6 +26,7 @@ const CloseConfirmationDialog = @import("close_confirmation_dialog.zig").CloseCo
 const SplitTree = @import("split_tree.zig").SplitTree;
 const Surface = @import("surface.zig").Surface;
 const Tab = @import("tab.zig").Tab;
+const TabColor = @import("tab_color.zig").TabColor;
 const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
@@ -313,6 +314,18 @@ pub const Window = extern struct {
             self.as(gtk.Widget).addCssClass("devel");
         }
 
+        // React to tab order changes so our per-tab CSS class tags
+        // stay in sync. page-attached and page-detached are already
+        // wired via the blueprint template callbacks; only reorder
+        // needs an explicit hook from Zig.
+        _ = adw.TabView.signals.page_reordered.connect(
+            priv.tab_view,
+            *Self,
+            tabViewPageReordered,
+            self,
+            .{},
+        );
+
         // Setup our tab binding group. This ensures certain properties
         // are only synced from the currently active tab.
         priv.tab_bindings = gobject.BindingGroup.new();
@@ -362,6 +375,7 @@ pub const Window = extern struct {
             .init("prompt-surface-title", actionPromptSurfaceTitle, null),
             .init("prompt-tab-title", actionPromptTabTitle, null),
             .init("prompt-context-tab-title", actionPromptContextTabTitle, null),
+            .init("set-context-tab-color", actionSetContextTabColor, s_variant_type),
             .init("ring-bell", actionRingBell, null),
             .init("split-right", actionSplitRight, null),
             .init("split-left", actionSplitLeft, null),
@@ -1486,6 +1500,19 @@ pub const Window = extern struct {
             .{},
         );
 
+        // React to color changes on this tab so we can regenerate
+        // the per-window tab-color CSS.
+        _ = gobject.Object.signals.notify.connect(
+            tab,
+            *Self,
+            tabColorChanged,
+            self,
+            .{ .detail = "color" },
+        );
+
+        // New tab in the strip — positions may have shifted, redo CSS.
+        self.rebuildTabColorCss();
+
         // Attach listeners for the surface.
         //
         // Interesting behavior here that was previously undocumented but
@@ -1533,6 +1560,9 @@ pub const Window = extern struct {
         if (tab.getSurfaceTree()) |tree| {
             self.disconnectSurfaceHandlers(tree);
         }
+
+        // Tab gone — nth-child positions in the strip have shifted.
+        self.rebuildTabColorCss();
     }
 
     fn tabViewCreateWindow(
@@ -1564,11 +1594,115 @@ pub const Window = extern struct {
         priv.tab_view.closePage(page);
     }
 
+    fn tabViewPageReordered(
+        _: *adw.TabView,
+        _: *adw.TabPage,
+        _: c_int,
+        self: *Self,
+    ) callconv(.c) void {
+        self.rebuildTabColorCss();
+    }
+
+    /// Notify handler for `Tab.color` — any colored tab in this
+    /// window changing color (including being cleared to none)
+    /// triggers a CSS rebuild.
+    fn tabColorChanged(
+        _: *Tab,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        self.rebuildTabColorCss();
+    }
+
+    /// Walk the AdwTabBar's widget tree, find each rendered `tab`
+    /// node, and add/remove the `gh-tab-color-<name>` CSS class so
+    /// the tab pill renders with the right palette color.
+    ///
+    /// We do this rather than CSS `nth-child(N)` because libadwaita
+    /// wraps each tab in its own container — `nth-child` would match
+    /// every tab in a one-child container, painting the strip
+    /// uniformly. Walking the tree and tagging widgets directly is
+    /// more verbose but correct.
+    ///
+    /// Identifying which tab corresponds to which page: we count
+    /// rendered tab widgets in document order and cross-reference
+    /// against `tab_view.getNthPage`. Order is preserved by libadwaita
+    /// (tabs render in page order).
+    fn rebuildTabColorCss(self: *Self) void {
+        const priv = self.private();
+
+        var ctx: TabColorWalkCtx = .{
+            .colors = undefined,
+            .colors_len = 0,
+        };
+
+        // Collect the palette color for each page in order.
+        const n = priv.tab_view.getNPages();
+        var i: c_int = 0;
+        while (i < n and ctx.colors_len < ctx.colors.len) : (i += 1) {
+            const page = priv.tab_view.getNthPage(i);
+            const child = page.getChild();
+            const tab = gobject.ext.cast(Tab, child) orelse {
+                ctx.colors[ctx.colors_len] = .none;
+                ctx.colors_len += 1;
+                continue;
+            };
+            ctx.colors[ctx.colors_len] = tab.getColor();
+            ctx.colors_len += 1;
+        }
+
+        // Walk the tab bar widget tree, applying classes to each
+        // `tab` CSS node found in order.
+        ctx.cursor = 0;
+        walkAndTagTabs(priv.tab_bar.as(gtk.Widget), &ctx);
+    }
+
+    const TabColorWalkCtx = struct {
+        /// Palette color per page in tab-view order. 64 max tabs
+        /// per window — generous for a real-world workflow and
+        /// avoids needing a heap allocation in the walker.
+        colors: [64]TabColor,
+        colors_len: usize,
+        cursor: usize = 0,
+    };
+
+    /// Recursively walk a widget tree. We identify the rendered tab
+    /// pill by GType name (libadwaita's internal class is `AdwTab`,
+    /// confirmed against libadwaita 1.9). Each tab found in document
+    /// order receives the corresponding page's palette CSS class.
+    /// If libadwaita ever renames the widget, the walker silently
+    /// no-ops — colors stop applying but nothing breaks.
+    fn walkAndTagTabs(w: *gtk.Widget, ctx: *TabColorWalkCtx) void {
+        const ti: *gobject.TypeInstance = @ptrCast(@alignCast(w));
+        const gtype_name = std.mem.span(gobject.typeNameFromInstance(ti));
+
+        if (std.mem.eql(u8, gtype_name, "AdwTab")) {
+            inline for (TabColor.all) |c| {
+                if (c.barCssClass()) |cls| w.removeCssClass(cls);
+            }
+            if (ctx.cursor < ctx.colors_len) {
+                const color = ctx.colors[ctx.cursor];
+                ctx.cursor += 1;
+                if (color.barCssClass()) |cls| w.addCssClass(cls);
+            }
+        }
+
+        var child = w.getFirstChild();
+        while (child) |c| : (child = c.getNextSibling()) {
+            walkAndTagTabs(c, ctx);
+        }
+    }
+
     fn tabViewNPages(
         _: *adw.TabView,
         _: *gobject.ParamSpec,
         self: *Self,
     ) callconv(.c) void {
+        // Page added or removed — positions used by our nth-child
+        // CSS rules may have shifted. Regenerate before any other
+        // bookkeeping below.
+        self.rebuildTabColorCss();
+
         const priv = self.private();
         if (priv.tab_view.getNPages() == 0) {
             // If we have no pages left then we want to close window.
@@ -1842,6 +1976,26 @@ pub const Window = extern struct {
         const child = page.getChild();
         const tab = gobject.ext.cast(Tab, child) orelse return;
         tab.promptTabTitle();
+    }
+
+    /// Set the palette color on the tab that the context menu was
+    /// opened for. Parameter is a string: one of `TabColor`'s names
+    /// (or "none" to clear).
+    fn actionSetContextTabColor(
+        _: *gio.SimpleAction,
+        param_: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const param = param_ orelse return;
+        var str: ?[*:0]const u8 = null;
+        param.get("&s", &str);
+        const color_name = std.mem.span(str orelse return);
+
+        const priv = self.private();
+        const page = priv.context_menu_page orelse return;
+        const child = page.getChild();
+        const tab = gobject.ext.cast(Tab, child) orelse return;
+        tab.setColorFromName(color_name);
     }
 
     fn actionPromptSurfaceTitle(

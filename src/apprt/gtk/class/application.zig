@@ -211,6 +211,7 @@ pub const Application = extern struct {
         /// Providers for loading custom stylesheets defined by user
         custom_css_providers: std.ArrayListUnmanaged(*gtk.CssProvider) = .empty,
 
+
         /// A copy of the LANG environment variable that was provided to Ghostty
         /// by the system. If this is null, the LANG environment variable did
         /// not exist in Ghostty's environment variable.
@@ -769,6 +770,8 @@ pub const Application = extern struct {
             .end_search => Action.endSearch(target),
             .search_total => Action.searchTotal(target, value),
             .search_selected => Action.searchSelected(target, value),
+
+            .tab_color => return Action.tabColor(target, value),
 
             // Unimplemented
             .secure_input,
@@ -2160,6 +2163,38 @@ const Action = struct {
                 .visible => false,
                 .hidden => true,
             }),
+        }
+    }
+
+    pub fn tabColor(
+        target: apprt.Target,
+        value: apprt.action.TabColor,
+    ) bool {
+        switch (target) {
+            .app => return false,
+            .surface => |core| {
+                const surface = core.rt_surface.surface;
+                const tab = ext.getAncestor(
+                    Tab,
+                    surface.as(gtk.Widget),
+                ) orelse {
+                    log.warn("surface is not in a tab, ignoring tab_color", .{});
+                    return false;
+                };
+
+                // Cross-apprt TabColor mirrors the GTK-side enum tag-for-tag.
+                // Map by tag name so the GTK-internal enum can evolve
+                // independently (e.g., gain helpers) without breaking.
+                const gtk_color = std.meta.stringToEnum(
+                    @import("tab_color.zig").TabColor,
+                    @tagName(value),
+                ) orelse {
+                    log.warn("unknown tab color: {s}", .{@tagName(value)});
+                    return false;
+                };
+                tab.setColor(gtk_color);
+                return true;
+            },
         }
     }
 
