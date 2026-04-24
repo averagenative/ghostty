@@ -16,6 +16,7 @@ const Application = @import("application.zig").Application;
 const SplitTree = @import("split_tree.zig").SplitTree;
 const Surface = @import("surface.zig").Surface;
 const TabColor = @import("tab_color.zig").TabColor;
+const TabGroup = @import("tab_group.zig").TabGroup;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
 
 const log = std.log.scoped(.gtk_ghostty_window);
@@ -164,6 +165,22 @@ pub const Tab = extern struct {
                 },
             );
         };
+
+        /// The tab group this tab belongs to, or null if ungrouped.
+        /// This is a *weak* reference — the group owns the strong ref.
+        /// Set by `Window.addTabToGroup` / `removeTabFromGroup`, not
+        /// directly by consumers.
+        pub const group = struct {
+            pub const name = "group";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                ?*TabGroup,
+                .{
+                    .accessor = C.privateObjFieldAccessor("group"),
+                },
+            );
+        };
     };
 
     pub const signals = struct {
@@ -197,6 +214,10 @@ pub const Tab = extern struct {
         /// Defaults to `.none`. Exposed via the `color` GObject property
         /// as a string so it round-trips cleanly through GAction params.
         color: TabColor = .none,
+
+        /// Weak back-reference to the tab group this tab belongs to,
+        /// or null if ungrouped. See the `group` property docstring.
+        group: ?*TabGroup = null,
 
         // Template bindings
         split_tree: *SplitTree,
@@ -361,6 +382,23 @@ pub const Tab = extern struct {
             return;
         };
         self.setColor(parsed);
+    }
+
+    /// Get the tab group this tab belongs to, or null if ungrouped.
+    /// Does not add a reference.
+    pub fn getGroup(self: *Self) ?*TabGroup {
+        return self.private().group;
+    }
+
+    /// Set (or clear) the tab group this tab belongs to. Called by
+    /// `TabGroup.addTab` / `removeTab` to keep the back-reference in
+    /// sync. This is a *weak* reference; the caller owns the lifetime
+    /// of the group, which must outlive any read of `tab.group`.
+    pub fn setGroup(self: *Self, new_group: ?*TabGroup) void {
+        const priv = self.private();
+        if (priv.group == new_group) return;
+        priv.group = new_group;
+        self.as(gobject.Object).notifyByPspec(properties.group.impl.param_spec);
     }
 
     /// Get the currently active surface. See the "active-surface" property.
@@ -686,6 +724,7 @@ pub const Tab = extern struct {
                 properties.@"active-surface".impl,
                 properties.color.impl,
                 properties.config.impl,
+                properties.group.impl,
                 properties.@"split-tree".impl,
                 properties.@"surface-tree".impl,
                 properties.title.impl,
