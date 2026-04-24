@@ -208,6 +208,23 @@ label.resize-overlay {
 .gh-tab-color-slate:checked,  .gh-tab-color-slate:selected,  .gh-tab-color-slate.selected  { background-color: rgba(94, 92, 100, 1.0); }
 
 /*
+ * Tab group accent
+ *
+ * A solid 4px left-edge bar in the group's color. Stacks visually
+ * with `.gh-tab-color-*` (per-tab background) so a tab can show its
+ * own color and its group affiliation simultaneously.
+ */
+.gh-tab-group-blue   { box-shadow: inset 4px 0 0 0 #3584e4; }
+.gh-tab-group-teal   { box-shadow: inset 4px 0 0 0 #33b1b1; }
+.gh-tab-group-green  { box-shadow: inset 4px 0 0 0 #26a269; }
+.gh-tab-group-yellow { box-shadow: inset 4px 0 0 0 #cd9309; }
+.gh-tab-group-orange { box-shadow: inset 4px 0 0 0 #ed5b00; }
+.gh-tab-group-red    { box-shadow: inset 4px 0 0 0 #e01b24; }
+.gh-tab-group-pink   { box-shadow: inset 4px 0 0 0 #c061cb; }
+.gh-tab-group-purple { box-shadow: inset 4px 0 0 0 #9141ac; }
+.gh-tab-group-slate  { box-shadow: inset 4px 0 0 0 #5e5c64; }
+
+/*
  * Splits
  */
 

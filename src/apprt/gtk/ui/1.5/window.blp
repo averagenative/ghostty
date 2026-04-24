@@ -321,6 +321,17 @@ menu tab_context_menu {
     action: "win.prompt-context-tab-title";
   }
 
+  section {
+    item {
+      label: _("New Group from Tab");
+      action: "win.new-group-from-context-tab";
+    }
+    item {
+      label: _("Remove from Group");
+      action: "win.remove-context-tab-from-group";
+    }
+  }
+
   submenu {
     label: _("Color");
 

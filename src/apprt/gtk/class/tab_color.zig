@@ -115,6 +115,25 @@ pub const TabColor = enum(u8) {
         };
     }
 
+    /// CSS class applied to a tab in the strip when it's a member of
+    /// a group whose color is this entry. Drives a left-edge accent
+    /// border (defined in style.css). Null for `.none` so ungrouped
+    /// tabs (or groups with no color set) get no extra class.
+    pub fn groupAccentCssClass(self: TabColor) ?[:0]const u8 {
+        return switch (self) {
+            .none => null,
+            .blue => "gh-tab-group-blue",
+            .teal => "gh-tab-group-teal",
+            .green => "gh-tab-group-green",
+            .yellow => "gh-tab-group-yellow",
+            .orange => "gh-tab-group-orange",
+            .red => "gh-tab-group-red",
+            .pink => "gh-tab-group-pink",
+            .purple => "gh-tab-group-purple",
+            .slate => "gh-tab-group-slate",
+        };
+    }
+
     /// Localized human-readable label for menu entries.
     pub fn label(self: TabColor) [:0]const u8 {
         return switch (self) {

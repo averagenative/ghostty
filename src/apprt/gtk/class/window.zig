@@ -27,6 +27,7 @@ const SplitTree = @import("split_tree.zig").SplitTree;
 const Surface = @import("surface.zig").Surface;
 const Tab = @import("tab.zig").Tab;
 const TabColor = @import("tab_color.zig").TabColor;
+const TabGroup = @import("tab_group.zig").TabGroup;
 const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
@@ -257,6 +258,17 @@ pub const Window = extern struct {
         /// setup by `setup-menu`.
         context_menu_page: ?*adw.TabPage = null,
 
+        /// Tab groups owned by this window. Each group holds strong
+        /// references to its member tabs; the window holds the only
+        /// strong references to the groups themselves. Lifecycle is
+        /// per-window (not persisted across restarts).
+        groups: std.ArrayListUnmanaged(*TabGroup) = .empty,
+
+        /// Monotonic counter for naming new groups ("Group 1", ...).
+        /// Also used to deterministically rotate the default color
+        /// palette across newly created groups.
+        next_group_id: c_uint = 0,
+
         // Template bindings
         tab_overview: *adw.TabOverview,
         tab_bar: *adw.TabBar,
@@ -376,6 +388,8 @@ pub const Window = extern struct {
             .init("prompt-tab-title", actionPromptTabTitle, null),
             .init("prompt-context-tab-title", actionPromptContextTabTitle, null),
             .init("set-context-tab-color", actionSetContextTabColor, s_variant_type),
+            .init("new-group-from-context-tab", actionNewGroupFromContextTab, null),
+            .init("remove-context-tab-from-group", actionRemoveContextTabFromGroup, null),
             .init("ring-bell", actionRingBell, null),
             .init("split-right", actionSplitRight, null),
             .init("split-left", actionSplitLeft, null),
@@ -1233,6 +1247,12 @@ pub const Window = extern struct {
             priv.config = null;
         }
 
+        // Release every tab group we own. Each group's dispose unrefs
+        // its member tabs, which is fine because by this point the
+        // window's tab view is also being torn down.
+        for (priv.groups.items) |g| g.unref();
+        priv.groups.deinit(Application.default().allocator());
+
         priv.tab_bindings.setSource(null);
 
         gtk.Widget.disposeTemplate(
@@ -1589,6 +1609,12 @@ pub const Window = extern struct {
         self: *Self,
     ) callconv(.c) void {
         const priv = self.private();
+
+        // If this tab is in a group, drop it from the group first so
+        // the group's strong ref doesn't keep the tab alive past
+        // closePage. Destroys the group if it becomes empty.
+        self.removeTabFromGroup(tab);
+
         const page = priv.tab_view.getPage(tab.as(gtk.Widget));
         // TODO: connect close page handler to tab to check for confirmation
         priv.tab_view.closePage(page);
@@ -1614,6 +1640,103 @@ pub const Window = extern struct {
         self.rebuildTabColorCss();
     }
 
+    //---------------------------------------------------------------
+    // Tab groups
+    //
+    // Groups are created on demand from the context menu. Each group
+    // owns its member tabs (strong refs); the window owns the groups.
+    // Membership is reflected in the tab strip via the same walker
+    // that handles per-tab color: each grouped tab gets an extra
+    // `gh-tab-group-<color>` CSS class that paints a left-edge accent
+    // in the group's color.
+    //
+    // Collapse/expand and a dedicated header pill are deliberately
+    // not implemented yet — getting the data model and the basic
+    // assignment UX in front of the user first.
+
+    /// Mint the next group id and corresponding default name.
+    /// Caller-owned name string lives until the group is destroyed.
+    fn nextGroupNumber(self: *Self) c_uint {
+        const priv = self.private();
+        priv.next_group_id += 1;
+        return priv.next_group_id;
+    }
+
+    /// Pick a deterministic palette color for the n-th group created
+    /// in this window. Skips `.none` and rotates through the palette.
+    fn defaultColorForNthGroup(n: c_uint) TabColor {
+        // TabColor.all has 10 entries with `.none` at index 0; the
+        // remaining 9 are the palette colors we cycle through.
+        const palette_len: usize = TabColor.all.len - 1;
+        const idx: usize = @as(usize, @intCast(n - 1)) % palette_len;
+        return TabColor.all[idx + 1];
+    }
+
+    /// Create a new group containing the given seed tab. The group
+    /// receives an auto-generated name and a palette color rotated
+    /// from the window's group counter. The seed tab is added as the
+    /// group's first member.
+    fn createGroupFromTab(self: *Self, tab: *Tab) !*TabGroup {
+        const priv = self.private();
+        const alloc = Application.default().allocator();
+
+        // If the tab is already in a group, remove it from that
+        // group first to keep the back-reference invariant intact.
+        if (tab.getGroup()) |existing| {
+            _ = existing.removeTab(tab);
+            self.maybeDestroyEmptyGroup(existing);
+        }
+
+        const number = self.nextGroupNumber();
+        const color = defaultColorForNthGroup(number);
+
+        // Build the default name as a heap-allocated null-terminated
+        // string so TabGroup can dupe it independently.
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrintZ(
+            &name_buf,
+            "Group {d}",
+            .{number},
+        );
+
+        const group = TabGroup.new(number, name, color);
+        errdefer group.unref();
+
+        try priv.groups.append(alloc, group);
+        try group.addTab(tab, null);
+
+        // The new group affects the tab strip — repaint.
+        self.rebuildTabColorCss();
+        return group;
+    }
+
+    /// If a group has no remaining members, destroy it and remove it
+    /// from the window's registry. No-op if the group still has
+    /// members or isn't owned by this window.
+    fn maybeDestroyEmptyGroup(self: *Self, group: *TabGroup) void {
+        if (!group.isEmpty()) return;
+
+        const priv = self.private();
+        for (priv.groups.items, 0..) |g, i| {
+            if (g != group) continue;
+            _ = priv.groups.orderedRemove(i);
+            g.unref();
+            return;
+        }
+    }
+
+    /// Remove a tab from its group (if any) and destroy the group if
+    /// that leaves it empty.
+    fn removeTabFromGroup(self: *Self, tab: *Tab) void {
+        const group = tab.getGroup() orelse return;
+        _ = group.removeTab(tab);
+        self.maybeDestroyEmptyGroup(group);
+        self.rebuildTabColorCss();
+    }
+
+    //---------------------------------------------------------------
+    // Tab color (and group accent) walker
+
     /// Walk the AdwTabBar's widget tree, find each rendered `tab`
     /// node, and add/remove the `gh-tab-color-<name>` CSS class so
     /// the tab pill renders with the right palette color.
@@ -1630,41 +1753,8 @@ pub const Window = extern struct {
     /// (tabs render in page order).
     fn rebuildTabColorCss(self: *Self) void {
         const priv = self.private();
-
-        var ctx: TabColorWalkCtx = .{
-            .colors = undefined,
-            .colors_len = 0,
-        };
-
-        // Collect the palette color for each page in order.
-        const n = priv.tab_view.getNPages();
-        var i: c_int = 0;
-        while (i < n and ctx.colors_len < ctx.colors.len) : (i += 1) {
-            const page = priv.tab_view.getNthPage(i);
-            const child = page.getChild();
-            const tab = gobject.ext.cast(Tab, child) orelse {
-                ctx.colors[ctx.colors_len] = .none;
-                ctx.colors_len += 1;
-                continue;
-            };
-            ctx.colors[ctx.colors_len] = tab.getColor();
-            ctx.colors_len += 1;
-        }
-
-        // Walk the tab bar widget tree, applying classes to each
-        // `tab` CSS node found in order.
-        ctx.cursor = 0;
-        walkAndTagTabs(priv.tab_bar.as(gtk.Widget), &ctx);
+        walkAndTagTabs(priv.tab_bar.as(gtk.Widget));
     }
-
-    const TabColorWalkCtx = struct {
-        /// Palette color per page in tab-view order. 64 max tabs
-        /// per window — generous for a real-world workflow and
-        /// avoids needing a heap allocation in the walker.
-        colors: [64]TabColor,
-        colors_len: usize,
-        cursor: usize = 0,
-    };
 
     /// Recursively walk a widget tree. We identify the rendered tab
     /// pill by GType name (libadwaita's internal class is `AdwTab`,
@@ -1672,25 +1762,53 @@ pub const Window = extern struct {
     /// order receives the corresponding page's palette CSS class.
     /// If libadwaita ever renames the widget, the walker silently
     /// no-ops — colors stop applying but nothing breaks.
-    fn walkAndTagTabs(w: *gtk.Widget, ctx: *TabColorWalkCtx) void {
+    fn walkAndTagTabs(w: *gtk.Widget) void {
         const ti: *gobject.TypeInstance = @ptrCast(@alignCast(w));
         const gtype_name = std.mem.span(gobject.typeNameFromInstance(ti));
 
         if (std.mem.eql(u8, gtype_name, "AdwTab")) {
+            // Strip every possible palette / group class so reorders
+            // and clears don't leave stale tags behind.
             inline for (TabColor.all) |c| {
                 if (c.barCssClass()) |cls| w.removeCssClass(cls);
+                if (c.groupAccentCssClass()) |cls| w.removeCssClass(cls);
             }
-            if (ctx.cursor < ctx.colors_len) {
-                const color = ctx.colors[ctx.cursor];
-                ctx.cursor += 1;
-                if (color.barCssClass()) |cls| w.addCssClass(cls);
+
+            // Look up the page associated with this AdwTab widget
+            // directly. Relying on tree-walk order to align with
+            // `tab_view.getNthPage(i)` is fragile — libadwaita may
+            // scroll-buffer or render phantom tabs during drags, so
+            // the walker index doesn't always match the page index.
+            if (adwTabPage(w)) |page| {
+                const child = page.getChild();
+                if (gobject.ext.cast(Tab, child)) |tab| {
+                    if (tab.getColor().barCssClass()) |cls| w.addCssClass(cls);
+                    if (tab.getGroup()) |g| {
+                        if (g.getColor().groupAccentCssClass()) |cls| {
+                            w.addCssClass(cls);
+                        }
+                    }
+                }
             }
         }
 
         var child = w.getFirstChild();
         while (child) |c| : (child = c.getNextSibling()) {
-            walkAndTagTabs(c, ctx);
+            walkAndTagTabs(c);
         }
+    }
+
+    /// Read the `page` GObject property from a rendered AdwTab
+    /// widget. libadwaita's AdwTab is a private class but its
+    /// properties are still introspectable by name via the GObject
+    /// property system. Returns null on any failure so the walker
+    /// silently skips tagging widgets it can't identify.
+    fn adwTabPage(w: *gtk.Widget) ?*adw.TabPage {
+        var value: gobject.Value = gobject.ext.Value.zero;
+        defer gobject.Value.unset(&value);
+        gobject.ext.Value.init(&value, ?*adw.TabPage);
+        w.as(gobject.Object).getProperty("page", &value);
+        return gobject.ext.Value.get(&value, ?*adw.TabPage);
     }
 
     fn tabViewNPages(
@@ -1996,6 +2114,39 @@ pub const Window = extern struct {
         const child = page.getChild();
         const tab = gobject.ext.cast(Tab, child) orelse return;
         tab.setColorFromName(color_name);
+    }
+
+    /// Create a new tab group containing the right-clicked tab. Group
+    /// gets an auto-generated name and rotated palette color; if the
+    /// tab was previously in a different group, that group is left
+    /// empty (and destroyed if no other members remain).
+    fn actionNewGroupFromContextTab(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        const page = priv.context_menu_page orelse return;
+        const child = page.getChild();
+        const tab = gobject.ext.cast(Tab, child) orelse return;
+        _ = self.createGroupFromTab(tab) catch |err| {
+            log.warn("failed to create tab group: {}", .{err});
+            return;
+        };
+    }
+
+    /// Remove the right-clicked tab from its group (if any). Destroys
+    /// the group if that leaves it empty.
+    fn actionRemoveContextTabFromGroup(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        const page = priv.context_menu_page orelse return;
+        const child = page.getChild();
+        const tab = gobject.ext.cast(Tab, child) orelse return;
+        self.removeTabFromGroup(tab);
     }
 
     fn actionPromptSurfaceTitle(

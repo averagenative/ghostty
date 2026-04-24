@@ -241,7 +241,7 @@ pub const TabGroup = extern struct {
     /// in the group, false otherwise.
     pub fn removeTab(self: *Self, tab: *Tab) bool {
         const priv = self.private();
-        const idx = priv.indexOfTab(tab) orelse return false;
+        const idx = indexOfTab(priv, tab) orelse return false;
 
         const removed = priv.members.orderedRemove(idx);
         removed.setGroup(null);
@@ -254,7 +254,7 @@ pub const TabGroup = extern struct {
     /// Return the member's position in the ordered list, or null if
     /// it isn't a member.
     pub fn indexOf(self: *Self, tab: *Tab) ?usize {
-        return self.private().indexOfTab(tab);
+        return indexOfTab(self.private(), tab);
     }
 
     pub fn isEmpty(self: *Self) bool {
