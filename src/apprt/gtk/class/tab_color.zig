@@ -115,6 +115,23 @@ pub const TabColor = enum(u8) {
         };
     }
 
+    /// CSS class applied to a group-header pill widget in the group
+    /// bar. Controls the pill's background color. Null for `.none`.
+    pub fn pillCssClass(self: TabColor) ?[:0]const u8 {
+        return switch (self) {
+            .none => null,
+            .blue => "gh-tab-group-pill-blue",
+            .teal => "gh-tab-group-pill-teal",
+            .green => "gh-tab-group-pill-green",
+            .yellow => "gh-tab-group-pill-yellow",
+            .orange => "gh-tab-group-pill-orange",
+            .red => "gh-tab-group-pill-red",
+            .pink => "gh-tab-group-pill-pink",
+            .purple => "gh-tab-group-pill-purple",
+            .slate => "gh-tab-group-pill-slate",
+        };
+    }
+
     /// CSS class applied to a tab in the strip when it's a member of
     /// a group whose color is this entry. Drives a left-edge accent
     /// border (defined in style.css). Null for `.none` so ungrouped

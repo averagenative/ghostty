@@ -1,0 +1,28 @@
+using Gtk 4.0;
+
+template $GhosttyTabGroupPill: Gtk.Box {
+  styles [
+    "gh-tab-group-pill",
+  ]
+
+  orientation: horizontal;
+  spacing: 6;
+  margin-start: 8;
+  margin-end: 8;
+  margin-top: 2;
+  margin-bottom: 2;
+
+  Gtk.Label name_label {
+    styles [
+      "gh-tab-group-pill-name",
+    ]
+    xalign: 0.0;
+    ellipsize: end;
+  }
+
+  Gtk.Label count_label {
+    styles [
+      "gh-tab-group-pill-count",
+    ]
+  }
+}

@@ -82,6 +82,16 @@ template $GhosttyWindow: Adw.ApplicationWindow {
       }
 
       [top]
+      Gtk.Box tab_group_bar {
+        styles [
+          "gh-tab-group-bar",
+        ]
+        orientation: horizontal;
+        spacing: 4;
+        visible: false;
+      }
+
+      [top]
       Adw.TabBar tab_bar {
         autohide: bind template.tabs-autohide;
         expand-tabs: bind template.tabs-wide;

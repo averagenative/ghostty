@@ -28,6 +28,7 @@ const Surface = @import("surface.zig").Surface;
 const Tab = @import("tab.zig").Tab;
 const TabColor = @import("tab_color.zig").TabColor;
 const TabGroup = @import("tab_group.zig").TabGroup;
+const TabGroupPill = @import("tab_group_pill.zig").TabGroupPill;
 const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
@@ -272,6 +273,7 @@ pub const Window = extern struct {
         // Template bindings
         tab_overview: *adw.TabOverview,
         tab_bar: *adw.TabBar,
+        tab_group_bar: *gtk.Box,
         tab_view: *adw.TabView,
         toolbar: *adw.ToolbarView,
         toast_overlay: *adw.ToastOverlay,
@@ -1247,6 +1249,16 @@ pub const Window = extern struct {
             priv.config = null;
         }
 
+        // Detach every pill from the group bar BEFORE we drop the
+        // window's strong refs on groups. Pills hold their own strong
+        // refs, so this triggers each pill's dispose, which
+        // disconnects its signal handlers from a still-live group.
+        // If the order were reversed, dispose would try to disconnect
+        // from a finalized group and fire CRITICAL warnings.
+        while (priv.tab_group_bar.as(gtk.Widget).getFirstChild()) |c| {
+            priv.tab_group_bar.remove(c);
+        }
+
         // Release every tab group we own. Each group's dispose unrefs
         // its member tabs, which is fine because by this point the
         // window's tab view is also being torn down.
@@ -1499,6 +1511,12 @@ pub const Window = extern struct {
         // If the tab was previously marked as needing attention
         // (e.g. due to a bell character), we now unmark that
         page.setNeedsAttention(@intFromBool(false));
+
+        // The active tab is part of peek-mode bookkeeping: switching
+        // to or away from a member of a collapsed group changes which
+        // siblings should be hidden. Cheap walk; no-op when no
+        // groups exist.
+        self.rebuildTabColorCss();
     }
 
     fn tabViewPageAttached(
@@ -1684,7 +1702,7 @@ pub const Window = extern struct {
         // group first to keep the back-reference invariant intact.
         if (tab.getGroup()) |existing| {
             _ = existing.removeTab(tab);
-            self.maybeDestroyEmptyGroup(existing);
+            _ = self.maybeDestroyEmptyGroup(existing);
         }
 
         const number = self.nextGroupNumber();
@@ -1705,24 +1723,49 @@ pub const Window = extern struct {
         try priv.groups.append(alloc, group);
         try group.addTab(tab, null);
 
-        // The new group affects the tab strip — repaint.
+        // React to this group's collapse toggle for the lifetime of
+        // the group. When collapsed changes, tabs in the strip need
+        // the peek-mode class (re)applied. The handler is
+        // automatically cleaned up when the group is disposed in
+        // `maybeDestroyEmptyGroup`.
+        _ = gobject.Object.signals.notify.connect(
+            group,
+            *Self,
+            onGroupCollapsedChanged,
+            self,
+            .{ .detail = "collapsed" },
+        );
+
+        // The new group affects both the tab strip (member color
+        // accent) and the group bar above it.
         self.rebuildTabColorCss();
+        self.rebuildGroupBar();
         return group;
+    }
+
+    fn onGroupCollapsedChanged(
+        _: *TabGroup,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        self.rebuildTabColorCss();
     }
 
     /// If a group has no remaining members, destroy it and remove it
     /// from the window's registry. No-op if the group still has
-    /// members or isn't owned by this window.
-    fn maybeDestroyEmptyGroup(self: *Self, group: *TabGroup) void {
-        if (!group.isEmpty()) return;
+    /// members or isn't owned by this window. Returns true if the
+    /// group was destroyed (so callers can rebuild the group bar).
+    fn maybeDestroyEmptyGroup(self: *Self, group: *TabGroup) bool {
+        if (!group.isEmpty()) return false;
 
         const priv = self.private();
         for (priv.groups.items, 0..) |g, i| {
             if (g != group) continue;
             _ = priv.groups.orderedRemove(i);
             g.unref();
-            return;
+            return true;
         }
+        return false;
     }
 
     /// Remove a tab from its group (if any) and destroy the group if
@@ -1730,8 +1773,36 @@ pub const Window = extern struct {
     fn removeTabFromGroup(self: *Self, tab: *Tab) void {
         const group = tab.getGroup() orelse return;
         _ = group.removeTab(tab);
-        self.maybeDestroyEmptyGroup(group);
+        const destroyed = self.maybeDestroyEmptyGroup(group);
         self.rebuildTabColorCss();
+        if (destroyed) self.rebuildGroupBar();
+    }
+
+    /// Tear down and repopulate the group header bar. Called when a
+    /// group is created or destroyed. Pill widgets themselves
+    /// subscribe to their group's notify/member-changed signals, so
+    /// changes to name/color/count don't require a bar rebuild —
+    /// only membership in the bar does.
+    fn rebuildGroupBar(self: *Self) void {
+        const priv = self.private();
+        const bar = priv.tab_group_bar;
+
+        // Detach every existing child. Always re-read first child
+        // rather than caching a sibling pointer — gtk_box_remove
+        // detaches the widget which makes the cached `next`
+        // pointer's validity unclear.
+        while (bar.as(gtk.Widget).getFirstChild()) |c| {
+            bar.remove(c);
+        }
+
+        for (priv.groups.items) |g| {
+            const pill = TabGroupPill.new(g);
+            bar.append(pill.as(gtk.Widget));
+        }
+
+        // Hide the bar entirely when there are no groups so it
+        // doesn't steal vertical space from the terminal.
+        bar.as(gtk.Widget).setVisible(@intFromBool(priv.groups.items.len > 0));
     }
 
     //---------------------------------------------------------------
@@ -1773,6 +1844,10 @@ pub const Window = extern struct {
                 if (c.barCssClass()) |cls| w.removeCssClass(cls);
                 if (c.groupAccentCssClass()) |cls| w.removeCssClass(cls);
             }
+            // Default to visible — we only hide via the collapse path
+            // below. Reset every tick so re-expanding a group always
+            // re-shows its members regardless of prior state.
+            w.setVisible(@intFromBool(true));
 
             // Look up the page associated with this AdwTab widget
             // directly. Relying on tree-walk order to align with
@@ -1786,6 +1861,16 @@ pub const Window = extern struct {
                     if (tab.getGroup()) |g| {
                         if (g.getColor().groupAccentCssClass()) |cls| {
                             w.addCssClass(cls);
+                        }
+                        // Peek mode: when a group is collapsed, hide
+                        // every member EXCEPT the currently-selected
+                        // tab in the view. GTK CSS can't shrink an
+                        // AdwTab via min/max-width, so we use widget
+                        // visibility — hidden widgets take zero
+                        // layout space, achieving the "extra space
+                        // for the active tab" effect.
+                        if (g.getCollapsed() and !pageIsSelected(w, page)) {
+                            w.setVisible(@intFromBool(false));
                         }
                     }
                 }
@@ -1809,6 +1894,18 @@ pub const Window = extern struct {
         gobject.ext.Value.init(&value, ?*adw.TabPage);
         w.as(gobject.Object).getProperty("page", &value);
         return gobject.ext.Value.get(&value, ?*adw.TabPage);
+    }
+
+    /// True if the given page is currently the selected page of the
+    /// AdwTabView the AdwTab widget belongs to. Walks up to find the
+    /// AdwTabView ancestor.
+    fn pageIsSelected(adw_tab: *gtk.Widget, page: *adw.TabPage) bool {
+        const view = ext.getAncestor(
+            adw.TabView,
+            adw_tab,
+        ) orelse return false;
+        const selected = view.getSelectedPage() orelse return false;
+        return selected == page;
     }
 
     fn tabViewNPages(
@@ -2351,6 +2448,7 @@ pub const Window = extern struct {
             gobject.ext.ensureType(SplitTree);
             gobject.ext.ensureType(Surface);
             gobject.ext.ensureType(Tab);
+            gobject.ext.ensureType(TabGroupPill);
             gtk.Widget.Class.setTemplateFromResource(
                 class.as(gtk.Widget.Class),
                 comptime gresource.blueprint(.{
@@ -2377,6 +2475,7 @@ pub const Window = extern struct {
             // Bindings
             class.bindTemplateChildPrivate("tab_overview", .{});
             class.bindTemplateChildPrivate("tab_bar", .{});
+            class.bindTemplateChildPrivate("tab_group_bar", .{});
             class.bindTemplateChildPrivate("tab_view", .{});
             class.bindTemplateChildPrivate("toolbar", .{});
             class.bindTemplateChildPrivate("toast_overlay", .{});

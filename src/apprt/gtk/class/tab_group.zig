@@ -172,6 +172,10 @@ pub const TabGroup = extern struct {
         return self.private().id;
     }
 
+    pub fn getName(self: *Self) ?[:0]const u8 {
+        return self.private().name;
+    }
+
     pub fn getColor(self: *Self) TabColor {
         return self.private().color;
     }
